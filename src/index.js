@@ -1,8 +1,8 @@
 const DEV_MODE = false; // set to true to enable terminal logging
 
-  const { Client, GatewayIntentBits, Partials, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require('discord.js');
+  const { Client, GatewayIntentBits, Partials, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
   const dotenv = require('dotenv');
-  const { BASE, fetchGuideEmbed, searchGuideDeep, searchGuideNormalizedNoCache, searchGuideFast } = require('./scraper');
+  const { BASE, fetchGuideEmbed, searchGuideFast } = require('./scraper');
   const crypto = require('crypto');
   const searchSessions = new Map();
 
@@ -240,7 +240,7 @@ const DEV_MODE = false; // set to true to enable terminal logging
     }
   });
 
-  // Share button: Posts the full current embed to the channel.
+  // Share button: Posts the current embed to the channel.
   client.on('interactionCreate', async (interaction) => {
     try {
       if (!interaction.isButton?.()) return;
@@ -251,7 +251,6 @@ const DEV_MODE = false; // set to true to enable terminal logging
         try { return await interaction.reply({ content: 'No embed to share.', flags: 64 }); } catch {}
         return;
       }
-      // Share the full embed content currently displayed to the user
       await interaction.channel.send({ embeds: [srcEmbed] });
       try { await interaction.reply({ content: 'Shared link to channel.', flags: 64 }); } catch {}
     } catch (e) {

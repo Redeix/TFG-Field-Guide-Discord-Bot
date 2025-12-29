@@ -5,6 +5,8 @@
 
   const BASE = 'https://terrafirmagreg-team.github.io/Field-Guide-Modern/en_us/';
   const EMBED_DESC_LIMIT = 4096;
+  // Lines starting with these labels are considered metadata and excluded from embeds.
+  const STAT_PREFIX_RE = /^(Recipe:|Multiblock:)/i;
 
   // Fragments containing these substrings will be ignored.
   const FRAGMENT_BLACKLIST_SUBSTRINGS = [
@@ -165,6 +167,7 @@
     if (tag === 'ul') return getListText($, el, false);
     if (tag === 'ol') return getListText($, el, true);
     const t = getInlineMarkdown($, $(el)).trim();
+    if (STAT_PREFIX_RE.test(t)) return '';
     if (/^\d+$/.test(t)) return '';
     return t;
   };
@@ -481,7 +484,7 @@
     scope.find('p, ul, ol').each((i, el) => {
       const t = nodeToText($, el);
       if (!t) return;
-      if (/^Rarity:|^Density:|^Type:|^Y:\s|^Size:|^Height:|^Indicator Max Depth:|^Stone Types:/i.test(t)) return;
+      if (STAT_PREFIX_RE.test(t)) return;
       const addLen = (blocks.length ? sepLen : 0) + t.length;
       if (currentLen + addLen > EMBED_DESC_LIMIT) {
         return false;
