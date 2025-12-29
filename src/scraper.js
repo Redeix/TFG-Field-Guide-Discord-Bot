@@ -58,10 +58,45 @@
   function getListText($, listEl, ordered) {
     const lines = [];
     $(listEl).children('li').each((i, li) => {
-      const t = $(li).text().trim();
-      if (t) lines.push(`${ordered ? `${i + 1}.` : '-' } ${t}`);
+      const t = getInlineMarkdown($, $(li));
+      const clean = (t || '').trim();
+      if (clean) lines.push(`${ordered ? `${i + 1}.` : '-' } ${clean}`);
     });
     return lines.join('\n');
+  };
+
+  /**
+   * Converts element children to inline Discord markdown.
+   * @param {import('cheerio').CheerioAPI} $
+   * @param {import('cheerio').Cheerio<import('cheerio').Element>} el
+   * @returns {string}
+   */
+  function getInlineMarkdown($, el) {
+    let out = '';
+    const children = el.contents();
+    children.each((_, child) => {
+      if (child.type === 'text') {
+        out += String(child.data || '');
+        return;
+      };
+      if (child.type === 'tag') {
+        const tag = (child.name || '').toLowerCase();
+        const $c = $(child);
+        if (tag === 'br') { out += '\n'; return; }
+        if (tag === 'strong' || tag === 'b') { const inner = getInlineMarkdown($, $c); out += inner ? `**${inner}**` : ''; return; };
+        if (tag === 'em' || tag === 'i') { const inner = getInlineMarkdown($, $c); out += inner ? `*${inner}*` : ''; return; };
+        if (tag === 'code' || tag === 'kbd') { const inner = getInlineMarkdown($, $c).replace(/`/g, '\u200B`'); out += inner ? `\`${inner}\`` : ''; return; };
+        if (tag === 'a') {
+          const href = $c.attr('href') || '';
+          const text = getInlineMarkdown($, $c) || href;
+          try { const abs = href ? new URL(href, BASE).toString() : ''; out += abs ? `[${text}](${abs})` : text; }
+          catch { out += text; }
+          return;
+        };
+        out += getInlineMarkdown($, $c);
+      };
+    });
+    return out;
   };
 
   /**
@@ -82,6 +117,23 @@
   };
 
   /**
+   * Returns true if the element is inside any of the given selectors.
+   * Useful for excluding UI/recipe containers from text extraction.
+   * @param {import('cheerio').CheerioAPI} $ - Cheerio instance.
+   * @param {import('cheerio').Cheerio<import('cheerio').Element>} el - Element to test.
+   * @param {string} selector - CSS selectors.
+   * @returns {boolean}
+   */
+  function isWithin($, el, selector) {
+    try {
+      const c = $(el).closest(selector);
+      return !!(c && c.length);
+    } catch {
+      return false;
+    };
+  };
+
+  /**
    * Determines if an element should be included in text.
    * @param {import('cheerio').CheerioAPI} $ - Cheerio instance.
    * @param {import('cheerio').Cheerio<import('cheerio').Element>} el - Element to check.
@@ -91,6 +143,8 @@
     const tag = $(el).prop('tagName')?.toLowerCase();
     if (!tag) return false;
     if (isBreadcrumb($, el)) return false;
+    // Exclude crafting/utility UI blocks entirely
+    if (isWithin($, el, '.crafting-recipe, .minecraft-text, .item-header, .glb-viewer, .glb-viewer-container')) return false;
     if (tag.startsWith('h')) return false;
     return tag === 'p' || tag === 'ul' || tag === 'ol';
   };
@@ -104,10 +158,15 @@
   function nodeToText($, el) {
     const tag = $(el).prop('tagName')?.toLowerCase();
     if (isBreadcrumb($, el)) return '';
+    const cls = ($(el).attr('class') || '').toLowerCase();
+    if (cls.includes('crafting-recipe-item-count')) return '';
+    if (isWithin($, el, '.crafting-recipe, .minecraft-text, .item-header, .glb-viewer, .glb-viewer-container')) return '';
     if (tag && tag.startsWith('h')) return '';
     if (tag === 'ul') return getListText($, el, false);
     if (tag === 'ol') return getListText($, el, true);
-    return $(el).text().trim();
+    const t = getInlineMarkdown($, $(el)).trim();
+    if (/^\d+$/.test(t)) return '';
+    return t;
   };
 
   /**
@@ -417,15 +476,21 @@
     const root = $('.col-md-9');
     const scope = root.length ? root : $.root();
     const blocks = [];
+    let currentLen = 0;
+    const sepLen = 2;
     scope.find('p, ul, ol').each((i, el) => {
       const t = nodeToText($, el);
       if (!t) return;
       if (/^Rarity:|^Density:|^Type:|^Y:\s|^Size:|^Height:|^Indicator Max Depth:|^Stone Types:/i.test(t)) return;
+      const addLen = (blocks.length ? sepLen : 0) + t.length;
+      if (currentLen + addLen > EMBED_DESC_LIMIT) {
+        return false;
+      };
       blocks.push(t);
-      if (blocks.length >= 3) return false;
+      currentLen += addLen;
     });
     const text = blocks.join('\n\n');
-    return truncateWithEllipsis(text, 1200);
+    return truncateWithEllipsis(text, EMBED_DESC_LIMIT);
   };
 
   /**
@@ -456,6 +521,16 @@
       const contentRoot = el.closest('.col-md-9');
       if (contentRoot && contentRoot.length && contentRoot.find(cursor).length === 0) break;
       if (isBreadcrumb($, cursor)) break;
+      const tagC = cursor.prop('tagName')?.toLowerCase();
+      if (tagC && tagC.startsWith('h')) {
+        const lvl = parseInt(tagC.slice(1), 10) || 6;
+        if (!level || lvl > level) {
+          const text = cursor.text().trim();
+          if (text) parts.push(`**${text}**`);
+        }
+        cursor = cursor.next();
+        continue;
+      }
       if (!shouldIncludeNode($, cursor)) {
         cursor = cursor.next();
         continue;
@@ -556,15 +631,22 @@
 
     const toc = buildToc($, baseUrl, title);
     const tocLines = toc.map(it => `- [${it.title}](${it.url})`);
-    // Do not repeat the page title in the description. The embed title already shows it.
-    const combined = [description || '', '', ...tocLines]
+    const baseText = (description || '').trim();
+    const baseLen = baseText.length;
+    const remaining = Math.max(0, EMBED_DESC_LIMIT - (baseLen ? baseLen + 2 : 0));
+    const pickedToc = [];
+    let used = 0;
+    for (const line of tocLines) {
+      const add = (pickedToc.length ? 1 : 0) + line.length + 1;
+      if (used + add > remaining) break;
+      pickedToc.push(line);
+      used += add;
+    };
+    const combined = [baseText, pickedToc.length ? '' : null, ...pickedToc]
       .filter(Boolean)
       .join('\n')
       .trim();
-    const finalDesc = truncateWithEllipsis(combined, EMBED_DESC_LIMIT);
-    const withEllipsis = toc.length > 0 && !finalDesc.endsWith('...')
-      ? truncateWithEllipsis(finalDesc + '...', EMBED_DESC_LIMIT)
-      : finalDesc;
+    const withEllipsis = truncateWithEllipsis(combined, EMBED_DESC_LIMIT);
 
     const embed = new EmbedBuilder()
       .setTitle(title)
